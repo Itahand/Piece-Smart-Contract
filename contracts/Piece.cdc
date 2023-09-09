@@ -45,7 +45,7 @@ pub contract Piece: NonFungibleToken {
 		pub var extra: {String: AnyStruct}
 		pub var timer: UInt64
 		pub let creationTime: UFix64
-		pub let embededHTML: String?
+		pub let embededHTML: String
 
 		access(account) fun purchased(serial: UInt64, buyer: Address) {
 			self.purchasers[serial] = buyer
@@ -62,7 +62,7 @@ pub contract Piece: NonFungibleToken {
 			_image: MetadataViews.HTTPFile,
 			_extra: {String: AnyStruct},
 			_currentTime: UFix64,
-			_embededHTML: String?,
+			_embededHTML: String,
 			) {
 
 			self.metadataId = _creatorID
@@ -283,7 +283,7 @@ pub contract Piece: NonFungibleToken {
 			pieceCreationDate: String,
 			contentCreationDate: String,
 			imgUrl: String,
-			embededHTML: String?,
+			embededHTML: String,
 		) {
 			// Check if a record for this ID Exist, if not
 			// create am empty one for it
