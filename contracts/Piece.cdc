@@ -9,7 +9,6 @@ pub contract Piece: NonFungibleToken {
 	access(self) let collectionInfo: {String: AnyStruct}
 
 	// Contract Information
-	pub var nextEditionId: UInt64
 	pub var totalSupply: UInt64
 
     // Events
@@ -429,7 +428,6 @@ pub contract Piece: NonFungibleToken {
     	self.collectionInfo["dateCreated"] = getCurrentBlock().timestamp
     	self.collectionInfo["website"] = MetadataViews.ExternalURL("https://www.piece.gg/")
 		self.collectionInfo["socials"] = {"Twitter": MetadataViews.ExternalURL("https://frontend-react-git-testing-piece.vercel.app/")}
-		self.nextEditionId = 0
 		self.totalSupply = 0
 		self.creatorIDs = {}
 		self.buyersList = {}
