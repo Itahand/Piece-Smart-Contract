@@ -2,8 +2,9 @@ import MetadataViews from "./standard/MetadataViews.cdc"
 import NonFungibleToken from "./standard/NonFungibleToken.cdc"
 import FungibleToken from "./standard/FungibleToken.cdc"
 import FlowToken from "./standard/FlowToken.cdc"
+import ViewResolver from "./standard/ViewResolver.cdc"
 
-pub contract Piece: NonFungibleToken {
+pub contract Piece: NonFungibleToken, ViewResolver {
 
 	// Collection Information
 	access(self) let collectionInfo: {String: AnyStruct}
@@ -112,30 +113,26 @@ pub contract Piece: NonFungibleToken {
 						description: metadata.description,
 						thumbnail: metadata.image
 					)
-				case Type<MetadataViews.NFTCollectionData>():
-					return MetadataViews.NFTCollectionData(
-						storagePath: Piece.CollectionStoragePath,
-						publicPath: Piece.CollectionPublicPath,
-						providerPath: Piece.CollectionPrivatePath,
-						publicCollection: Type<&Collection{NonFungibleToken.CollectionPublic, NonFungibleToken.Receiver, MetadataViews.ResolverCollection}>(),
-						publicLinkedType: Type<&Collection{NonFungibleToken.CollectionPublic, NonFungibleToken.Receiver, MetadataViews.ResolverCollection}>(),
-						providerLinkedType: Type<&Collection{NonFungibleToken.CollectionPublic, NonFungibleToken.Receiver, MetadataViews.ResolverCollection, NonFungibleToken.Provider}>(),
-						createEmptyCollectionFunction: (fun (): @NonFungibleToken.Collection {
-								return <- Piece.createEmptyCollection()
-						})
+				case Type<MetadataViews.Traits>():
+					return MetadataViews.dictToTraits(dict: self.getMetadata().extra, excludedNames: nil)
+
+				case Type<MetadataViews.NFTView>():
+					return MetadataViews.NFTView(
+						id: self.id,
+						uuid: self.uuid,
+						display: self.resolveView(Type<MetadataViews.Display>()) as! MetadataViews.Display?,
+						externalURL: self.resolveView(Type<MetadataViews.ExternalURL>()) as! MetadataViews.ExternalURL?,
+						collectionData: self.resolveView(Type<MetadataViews.NFTCollectionData>()) as! MetadataViews.NFTCollectionData?,
+						collectionDisplay: self.resolveView(Type<MetadataViews.NFTCollectionDisplay>()) as! MetadataViews.NFTCollectionDisplay?,
+						royalties: self.resolveView(Type<MetadataViews.Royalties>()) as! MetadataViews.Royalties?,
+						traits: self.resolveView(Type<MetadataViews.Traits>()) as! MetadataViews.Traits?
 					)
+				case Type<MetadataViews.NFTCollectionData>():
+					return Piece.resolveView(view)
         		case Type<MetadataViews.ExternalURL>():
         			return Piece.getCollectionAttribute(key: "website") as! MetadataViews.ExternalURL
 		        case Type<MetadataViews.NFTCollectionDisplay>():
-					let media = Piece.getCollectionAttribute(key: "name") as! MetadataViews.Media	
-      				return MetadataViews.NFTCollectionDisplay(
-          				name: Piece.getCollectionAttribute(key: "name") as! String,
-          				description: Piece.getCollectionAttribute(key: "description") as! String,
-          				externalURL: Piece.getCollectionAttribute(key: "website") as! MetadataViews.ExternalURL,
-          				squareImage: media,
-          				bannerImage: media,
-          				socials: Piece.getCollectionAttribute(key: "socials") as! {String: MetadataViews.ExternalURL},
-        			)
+					return Piece.resolveView(view)
 				case Type<MetadataViews.Medias>():
 					if metadata.embededHTML != nil {
 						return MetadataViews.Medias(
@@ -153,27 +150,15 @@ pub contract Piece: NonFungibleToken {
           			return MetadataViews.Royalties([
             			MetadataViews.Royalty(
               				recepient: getAccount(metadata.creatorAddress).getCapability<&FlowToken.Vault{FungibleToken.Receiver}>(/public/flowTokenReceiver),
-              				cut: 0.10, // 5% royalty on secondary sales
-              				description: "The Owner of the original text content gets 10% of every secondary sale."
+              				cut: 0.10, // 10% royalty on secondary sales
+              				description: "The creator of the original content get's 10% of every secondary sale."
             			)
           			])
 				case Type<MetadataViews.Serial>():
 					return MetadataViews.Serial(
 						self.serial
 					)
-				case Type<MetadataViews.Traits>():
-					return MetadataViews.dictToTraits(dict: self.getMetadata().extra, excludedNames: nil)
-				case Type<MetadataViews.NFTView>():
-					return MetadataViews.NFTView(
-						id: self.id,
-						uuid: self.uuid,
-						display: self.resolveView(Type<MetadataViews.Display>()) as! MetadataViews.Display?,
-						externalURL: self.resolveView(Type<MetadataViews.ExternalURL>()) as! MetadataViews.ExternalURL?,
-						collectionData: self.resolveView(Type<MetadataViews.NFTCollectionData>()) as! MetadataViews.NFTCollectionData?,
-						collectionDisplay: self.resolveView(Type<MetadataViews.NFTCollectionDisplay>()) as! MetadataViews.NFTCollectionDisplay?,
-						royalties: self.resolveView(Type<MetadataViews.Royalties>()) as! MetadataViews.Royalties?,
-						traits: self.resolveView(Type<MetadataViews.Traits>()) as! MetadataViews.Traits?
-					)
+
 			}
 			return nil
 		}
@@ -214,7 +199,21 @@ pub contract Piece: NonFungibleToken {
 		}
 	}
 
-	pub resource Collection: NonFungibleToken.Provider, NonFungibleToken.Receiver, NonFungibleToken.CollectionPublic, MetadataViews.ResolverCollection {
+    /// Defines the methods that are particular to this NFT contract collection
+    ///
+    pub resource interface PieceCollectionPublic {
+        pub fun deposit(token: @NonFungibleToken.NFT)
+        pub fun getIDs(): [UInt64]
+        pub fun borrowNFT(id: UInt64): &NonFungibleToken.NFT
+        pub fun borrowPiece(id: UInt64): &Piece.NFT? {
+            post {
+                (result == nil) || (result?.id == id):
+                    "Cannot borrow Piece NFT reference: the ID of the returned reference is incorrect"
+            }
+        }
+    }
+
+	pub resource Collection: PieceCollectionPublic, NonFungibleToken.Provider, NonFungibleToken.Receiver, NonFungibleToken.CollectionPublic, MetadataViews.ResolverCollection {
 
 		pub var ownedNFTs: @{UInt64: NonFungibleToken.NFT}
 
@@ -249,6 +248,22 @@ pub contract Piece: NonFungibleToken {
 			return (&self.ownedNFTs[id] as &NonFungibleToken.NFT?)!
 		}
 
+        /// Gets a reference to an NFT in the collection so that 
+        /// the caller can read its metadata and call its methods
+        ///
+        /// @param id: The ID of the wanted NFT
+        /// @return A reference to the wanted NFT resource
+        ///        
+        pub fun borrowPiece(id: UInt64): &Piece.NFT? {
+            if self.ownedNFTs[id] != nil {
+                // Create an authorized reference to allow downcasting
+                let ref = (&self.ownedNFTs[id] as auth &NonFungibleToken.NFT?)!
+                return ref as! &Piece.NFT
+            }
+
+            return nil
+        }
+
 		pub fun borrowViewResolver(id: UInt64): &AnyResource{MetadataViews.Resolver} {
 			let token = (&self.ownedNFTs[id] as auth &NonFungibleToken.NFT?)!
 			let nft = token as! &NFT
@@ -276,6 +291,7 @@ pub contract Piece: NonFungibleToken {
 
 		// Function to upload the Metadata to the contract.
 		pub fun createNFTMetadata(
+			channel: String,
 			creatorID: UInt64,
 			creatorAddress: Address,
 			sourceURL: String,
@@ -305,6 +321,7 @@ pub contract Piece: NonFungibleToken {
 							url: imgUrl,
 						),
 						_extra: {
+							"Channel": channel,
 							"Creator": creatorID,
 							"Source": sourceURL,
 							"Text content": textContent,
@@ -377,6 +394,41 @@ pub contract Piece: NonFungibleToken {
 		return <- create Collection()
 	}
 
+    /// Function that resolves a metadata view for this contract.
+    ///
+    /// @param view: The Type of the desired view.
+    /// @return A structure representing the requested view.
+    ///
+    pub fun resolveView(_ view: Type): AnyStruct? {
+        switch view {
+            case Type<MetadataViews.NFTCollectionData>():
+                return MetadataViews.NFTCollectionData(
+                    storagePath: Piece.CollectionStoragePath,
+                    publicPath: Piece.CollectionPublicPath,
+                    providerPath: Piece.CollectionPrivatePath,
+                    publicCollection: Type<&Piece.Collection{Piece.PieceCollectionPublic}>(),
+                    publicLinkedType: Type<&Piece.Collection{Piece.PieceCollectionPublic,NonFungibleToken.CollectionPublic,NonFungibleToken.Receiver,MetadataViews.ResolverCollection}>(),
+                    providerLinkedType: Type<&Piece.Collection{Piece.PieceCollectionPublic,NonFungibleToken.CollectionPublic,NonFungibleToken.Provider,MetadataViews.ResolverCollection}>(),
+                    createEmptyCollectionFunction: (fun (): @NonFungibleToken.Collection {
+                        return <-Piece.createEmptyCollection()
+                    })
+                )
+            case Type<MetadataViews.NFTCollectionDisplay>():
+				let media = Piece.getCollectionAttribute(key: "image") as! MetadataViews.Media	
+                return MetadataViews.NFTCollectionDisplay(
+                        name: "Piece",
+                        description: "Sell Pieces of any Tweet in seconds.",
+                        externalURL: MetadataViews.ExternalURL("https://piece.gg/"),
+                        squareImage: media,
+                        bannerImage: media,
+                        socials: {
+                            "twitter": MetadataViews.ExternalURL("https://twitter.com/CreateAPiece")
+                        }
+                    )
+        }
+        return nil
+    }
+
 	//Get all the recorded creatorIDs 
 	pub fun getAllcreatorIDs():[UInt64] {
 		return self.creatorIDs.keys
@@ -423,7 +475,7 @@ pub contract Piece: NonFungibleToken {
             			file: MetadataViews.HTTPFile(
             				url: "https://media.discordapp.net/attachments/1075564743152107530/1149417271597473913/Piece_collection_image.png?width=1422&height=1422"
             			),
-            			mediaType: "image"
+            			mediaType: "image/jpeg"
           			)			
     	self.collectionInfo["dateCreated"] = getCurrentBlock().timestamp
     	self.collectionInfo["website"] = MetadataViews.ExternalURL("https://www.piece.gg/")
