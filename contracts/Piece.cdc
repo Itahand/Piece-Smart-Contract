@@ -17,7 +17,7 @@ pub contract Piece: NonFungibleToken, ViewResolver {
     pub event Withdraw(id: UInt64, from: Address?)
 	pub event Deposit(id: UInt64, to: Address?)
 	pub event Minted(id: UInt64, recipient: Address, creatorID: UInt64)
-	pub event MetadataSuccess(creatorID: UInt64, textContent: String)
+	pub event MetadataSuccess(creatorID: UInt64, description: String)
 	pub event MetadataError(error: String)
 
 	// Paths
@@ -25,15 +25,66 @@ pub contract Piece: NonFungibleToken, ViewResolver {
 	pub let CollectionPublicPath: PublicPath
 	pub let CollectionPrivatePath: PrivatePath
 	pub let AdministratorStoragePath: StoragePath
-
-	// Maps metadataId of NFT to NFTMetadata
-	pub let creatorIDs: {UInt64: [NFTMetadata]}
-
-	// You can get a list of purchased NFTs
-	// by doing `buyersList.keys`
-	access(account) let buyersList: {Address: {UInt64: [UInt64]}}
+	pub let MetadataStoragePath: StoragePath
+	pub let MetadataPublicPath: PublicPath
 
 	access(account) let nftStorage: @{Address: {UInt64: NFT}}
+
+	pub resource MetadataStorage: MetadataStoragePublic {
+		// List of Creator 
+		pub var creatorsIds: {UInt64: [NFTMetadata]}
+
+		init () {
+			self.creatorsIds = {}
+		}
+
+		access(account) fun creatorExist(_ creatorId: UInt64)  {
+				if self.creatorsIds[creatorId] == nil {
+					self.creatorsIds[creatorId] = []
+				}
+		}
+		access (account) fun metadataIsNew(_ creatorId: UInt64, _ description: String): Bool {
+			self.creatorExist(creatorId)
+			let metadata = self.findMetadata(creatorId, description)
+			if metadata == nil {
+				return true
+			} else {
+				return false
+			}
+		}
+		access(account) fun addMetadata(_ creatorId: UInt64,_ metadata: NFTMetadata) {
+				if self.creatorsIds[creatorId] == nil {
+					self.creatorsIds[creatorId] = []
+				}
+
+				self.creatorsIds[creatorId]?.append(metadata)
+		}
+
+		// Public Functions
+		pub fun findMetadata(_ creatorId: UInt64,_ description: String): Piece.NFTMetadata? {
+			let metadatas = self.creatorsIds[creatorId]!
+			var i = metadatas.length - 1
+    		while i >= 0 {
+			    if (metadatas[i].description == description) {
+					return metadatas[i]
+				 }
+    			i = i - 1
+    		}
+			return nil
+		} 
+		pub fun getTimeRemaining(_ creatorID: UInt64,_ description: String): UFix64? {
+			let metadata = self.findMetadata(creatorID, description)!
+			let answer = (metadata.creationTime + 86400.0) - getCurrentBlock().timestamp
+			return answer
+		}
+	}
+
+    /// Defines the methods that are particular to this NFT contract collection
+    ///
+    pub resource interface MetadataStoragePublic {
+		pub fun getTimeRemaining(_ creatorID: UInt64,_ description: String): UFix64?
+		pub fun findMetadata(_ creatorId: UInt64,_ description: String): Piece.NFTMetadata?
+    }
 
 	pub struct NFTMetadata {
 		pub let creatorID: UInt64
@@ -85,11 +136,11 @@ pub contract Piece: NonFungibleToken, ViewResolver {
 		// The 'metadataId' is what maps this NFT to its 'NFTMetadata'
 		pub let creatorID: UInt64
 		pub let serial: UInt64
-		pub let indexNumber: Int
+		pub let description: String
 		pub let originalMinter: Address
 
 		pub fun getMetadata(): NFTMetadata {
-			return Piece.getNFTMetadata(self.creatorID, self.indexNumber )!
+			return Piece.getNFTMetadata(self.creatorID, self.description )!
 		}
 
 		pub fun getViews(): [Type] {
@@ -163,33 +214,20 @@ pub contract Piece: NonFungibleToken, ViewResolver {
 			return nil
 		}
 
-		init(_creatorID: UInt64, _indexNumber: Int, _recipient: Address) {
-			pre {
+		init(_creatorID: UInt64, _description: String, _recipient: Address) {
+			let metadataRef = Piece.getNFTMetadata(_creatorID, _description)!
+/* 			pre {
 				Piece.creatorIDs[_creatorID] != nil:
 					"This NFT does not exist in this collection."
-			}
+			} */
 			// Assign serial number to the NFT based on the number of minted NFTs
-			let _serial = Piece.getNFTMetadata(_creatorID, _indexNumber)!.minted
 			self.id = self.uuid
 			self.creatorID = _creatorID
-			self.serial = _serial
-			self.indexNumber = _indexNumber
+			self.serial = metadataRef.minted
+			self.description = _description
 			self.originalMinter = _recipient
-
-			// Update the buyers list so we keep track of who is purchasing
-			if let buyersRef = &Piece.buyersList[_recipient] as &{UInt64: [UInt64]}? {
-				if let metadataIdMap = &buyersRef[_creatorID] as &[UInt64]? {
-					metadataIdMap.append(_serial)
-				} else {
-					buyersRef[_creatorID] = [_serial]
-				}
-			} else {
-				Piece.buyersList[_recipient] = {_creatorID: [_serial]}
-			}
-
-			let metadataRef = (&Piece.creatorIDs[_creatorID]![_indexNumber] as &NFTMetadata)
 			// Update who bought this serial inside NFTMetadata
-			metadataRef.purchased(serial: _serial, buyer: _recipient)
+			metadataRef.purchased(serial: self.serial, buyer: _recipient)
 			// Update the total supply of this MetadataId by 1
 			metadataRef.updateMinted()
 			// Update Piece collection NFTs count
@@ -267,7 +305,7 @@ pub contract Piece: NonFungibleToken, ViewResolver {
 		pub fun borrowViewResolver(id: UInt64): &AnyResource{MetadataViews.Resolver} {
 			let token = (&self.ownedNFTs[id] as auth &NonFungibleToken.NFT?)!
 			let nft = token as! &NFT
-			return nft as &AnyResource{MetadataViews.Resolver}
+			return nft
 		}
 
 		pub fun claim() {
@@ -295,58 +333,50 @@ pub contract Piece: NonFungibleToken, ViewResolver {
 			creatorID: UInt64,
 			creatorAddress: Address,
 			sourceURL: String,
-			textContent: String,
+			description: String,
 			pieceCreationDate: String,
 			contentCreationDate: String,
 			imgUrl: String,
 			embededHTML: String,
 		) {
-			// Check if a record for this ID Exist, if not
-			// create am empty one for it
-			if Piece.creatorIDs[creatorID] == nil {
-				Piece.creatorIDs[creatorID] = []
-			}
-				
-			// Check if that creatorID has uploaded any NFTs
-			// If not, then stop and return error Event
-			if let account_NFTs = &Piece.creatorIDs[creatorID] as &[Piece.NFTMetadata]? {
-				if (self.isMetadataUploaded(_metadatasArray: account_NFTs, _textContent: textContent)) {
-					emit MetadataError(error: "A Metadata for this Event already exist")
-				} else {
-					Piece.creatorIDs[creatorID]?.append(NFTMetadata(
-						_creatorID: creatorID,
-						_creatorAddress: creatorAddress,
-						_description: textContent,
-						_image: MetadataViews.HTTPFile(
-							url: imgUrl,
-						),
-						_extra: {
-							"Channel": channel,
-							"Creator": creatorID,
-							"Source": sourceURL,
-							"Text content": textContent,
-							"Piece creation date": pieceCreationDate,
-							"Content creation date": contentCreationDate
-							},
-						_currentTime: getCurrentBlock().timestamp,
-						_embededHTML: embededHTML,
-					))
 
-					emit MetadataSuccess(creatorID: creatorID, textContent: textContent)
+			let metadatas <- Piece.account.load<@Piece.MetadataStorage>(from: Piece.MetadataStoragePath)!
+				// Check if Metadata already exist
+			if metadatas.metadataIsNew(creatorID, description) {
+					metadatas.addMetadata(creatorID, NFTMetadata(
+							_creatorID: creatorID,
+							_creatorAddress: creatorAddress,
+							_description: description,
+							_image: MetadataViews.HTTPFile(
+								url: imgUrl,
+							),
+							_extra: {
+								"Channel": channel,
+								"Creator": creatorID,
+								"Source": sourceURL,
+								"Text content": description,
+								"Piece creation date": pieceCreationDate,
+								"Content creation date": contentCreationDate
+								},
+							_currentTime: getCurrentBlock().timestamp,
+							_embededHTML: embededHTML,
+					))
+					emit MetadataSuccess(creatorID: creatorID, description: description)
+				} else {
+					emit MetadataError(error: "A Metadata for this Event already exist")
 				}
 
-
-  			}	
+			Piece.account.save(<- metadatas, to: Piece.MetadataStoragePath)
 		}
 
 		// mintNFT mints a new NFT and deposits
 		// it in the recipients collection
-		pub fun mintNFT(creatorID: UInt64, indexNumber: Int, recipient: Address) {
-			pre {
-				self.isMintingAvailable(_creatorID: creatorID, _indexNumber: indexNumber): "Minting for this NFT has ended."
-			}
+		pub fun mintNFT(creatorId: UInt64, description: String, recipient: Address) {
+/* 			pre {
+				self.isMintingAvailable(creatorId, description): "Minting for this NFT has ended."
+			} */
 
-			let nft <- create NFT(_creatorID: creatorID, _indexNumber: indexNumber, _recipient: recipient)
+			let nft <- create NFT(_creatorID: creatorId, _description: description, _recipient: recipient)
 
 			if let recipientCollection = getAccount(recipient).getCapability(Piece.CollectionPublicPath).borrow<&Piece.Collection{NonFungibleToken.CollectionPublic}>() {
 				recipientCollection.deposit(token: <- nft)
@@ -363,29 +393,17 @@ pub contract Piece: NonFungibleToken, ViewResolver {
 		pub fun createAdmin(): @Administrator {
 			return <- create Administrator()
 		}
-
 		// change piece of collection info
 		pub fun changeField(key: String, value: AnyStruct) {
 			Piece.collectionInfo[key] = value
 		}
-
-		access(account) fun isMintingAvailable(_creatorID: UInt64, _indexNumber: Int): Bool {
-			let metadata = Piece.getNFTMetadata(_creatorID, _indexNumber)!
+		access(account) fun isMintingAvailable(_ creatorId: UInt64, _ description: String): Bool {
+			let metadata = Piece.getNFTMetadata(creatorId, description)!
 			let answer = getCurrentBlock().timestamp <= (metadata.creationTime + 86400.0)
 
 			return answer
 		}
 
-		access(account) fun isMetadataUploaded(_metadatasArray: &[Piece.NFTMetadata], _textContent: String): Bool {
-			var i = 0
-    		while i < _metadatasArray.length {
-			    if (_metadatasArray[i].description == _textContent) {
-					return true
-				 }
-    		i = i + 1
-    		}
-			return false
-		}
 	}
 
 
@@ -430,33 +448,32 @@ pub contract Piece: NonFungibleToken, ViewResolver {
     }
 
 	//Get all the recorded creatorIDs 
-	pub fun getAllcreatorIDs():[UInt64] {
+/* 	pub fun getAllcreatorIDs():[UInt64] {
 		return self.creatorIDs.keys
-	}
+	} */
 
 	// Get information about a NFTMetadata
-	pub fun getNFTMetadata(_ creatorID: UInt64,_ indexNumber: Int): NFTMetadata? {
-		return self.creatorIDs[creatorID]![indexNumber]
+	pub fun getNFTMetadata(_ creatorId: UInt64,_ description: String): Piece.NFTMetadata? {
+		let publicAccount = self.account
+		let metadataCapability = publicAccount.getCapability<&{MetadataStoragePublic}>(self.MetadataPublicPath)
+		let metadatasRef = metadataCapability.borrow()!
+		let metadatas = metadatasRef.findMetadata(creatorId, description)
+
+		return metadatas
 	}
 
-	pub fun getOnecreatorIdMetadatas(creatorID: UInt64): [NFTMetadata]? {
+/*	pub fun getOnecreatorIdMetadatas(creatorID: UInt64): [NFTMetadata]? {
 		return self.creatorIDs[creatorID]
-	}
+	} */
 
-	pub fun getTimeRemaining(_creatorID: UInt64,_indexNumber: Int): UFix64? {
+/* 	pub fun getTimeRemaining(_creatorID: UInt64,_indexNumber: Int): UFix64? {
 		let metadata = Piece.getNFTMetadata(_creatorID, _indexNumber)!
 		let answer = (metadata.creationTime + 86400.0) - getCurrentBlock().timestamp
 		return answer
-	}
-
-	pub fun getbuyersList(): {Address: {UInt64: [UInt64]}} {
-		return self.buyersList
-	}
+	} */
 
 	pub fun getCollectionInfo(): {String: AnyStruct} {
 		let collectionInfo = self.collectionInfo
-		collectionInfo["creatorIDs"] = self.creatorIDs
-		collectionInfo["buyersList"] = self.buyersList
 		collectionInfo["totalSupply"] = self.totalSupply
 		collectionInfo["version"] = 1
 		return collectionInfo
@@ -481,8 +498,6 @@ pub contract Piece: NonFungibleToken, ViewResolver {
     	self.collectionInfo["website"] = MetadataViews.ExternalURL("https://www.piece.gg/")
 		self.collectionInfo["socials"] = {"Twitter": MetadataViews.ExternalURL("https://frontend-react-git-testing-piece.vercel.app/")}
 		self.totalSupply = 0
-		self.creatorIDs = {}
-		self.buyersList = {}
 		self.nftStorage <- {}
 
 		// Set the named paths
@@ -490,6 +505,8 @@ pub contract Piece: NonFungibleToken, ViewResolver {
 		self.CollectionPublicPath = /public/PieceCollection
 		self.CollectionPrivatePath = /private/PieceCollection
 		self.AdministratorStoragePath = /storage/PieceAdministrator
+		self.MetadataStoragePath = /storage/PieceMetadata
+		self.MetadataPublicPath = /public/PieceMetadata
 
 		// Create a Collection resource and save it to storage
 		let collection <- create Collection()
@@ -501,9 +518,19 @@ pub contract Piece: NonFungibleToken, ViewResolver {
 			target: self.CollectionStoragePath
 		)
 
-		// Create a Administrator resource and save it to storage
+		// Create a Administrator resource and save it to Piece account storage
 		let administrator <- create Administrator()
 		self.account.save(<- administrator, to: self.AdministratorStoragePath)
+
+		// Create a Metadata Storage resource and save it to Piece account storage
+		let metadataStorage <- create MetadataStorage()
+		self.account.save(<- metadataStorage, to: self.MetadataStoragePath)
+
+		// Create a public capability for the Metadata Storage
+		self.account.link<&MetadataStorage{MetadataStoragePublic}>(
+			self.MetadataPublicPath,
+			target: self.MetadataStoragePath
+		)
 
 		emit ContractInitialized()
 	}
