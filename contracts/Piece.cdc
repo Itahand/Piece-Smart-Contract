@@ -64,7 +64,6 @@ pub contract Piece: NonFungibleToken, ViewResolver {
 			metadataRef.updateMinted()
 
 		}
-
 				// Public Functions
 		pub fun findMetadataRef(_ creatorId: UInt64,_ description: String): &Piece.NFTMetadata? {
 			let metadatas = self.creatorsIds[creatorId]!
@@ -107,39 +106,58 @@ pub contract Piece: NonFungibleToken, ViewResolver {
 
 	pub struct NFTMetadata {
 		pub let creatorID: UInt64
+		pub var creatorUsername: String
 		pub let creatorAddress: Address
 		pub let description: String
 		pub let image: MetadataViews.HTTPFile
 		pub let metadataId: UInt64
+		pub var supply: UInt64
 		pub var minted: UInt64
+		pub let unlimited: Bool
 		pub var extra: {String: AnyStruct}
 		pub var timer: UInt64
+		pub let pieceCreationDate: String
+		pub let contentCreationDate: String
 		pub let creationTime: UFix64
+		pub let lockdownTime: UFix64
 		pub let embededHTML: String
 
 		access(account) fun updateMinted() {
 			self.minted = self.minted + 1
+			if(self.unlimited) {
+				self.supply = self.supply + 1
+			}
 		}
-
 		init(
 			_creatorID: UInt64,
+			_creatorUsername: String,
 			_creatorAddress: Address,
 			_description: String,
 			_image: MetadataViews.HTTPFile,
+			_supply: UInt64,
 			_extra: {String: AnyStruct},
+			_pieceCreationDate: String,
+			_contentCreationDate: String,
 			_currentTime: UFix64,
+			_lockdownTime: UFix64,
 			_embededHTML: String,
 			) {
 
 			self.metadataId = _creatorID
 			self.creatorID = _creatorID
+			self.creatorUsername = _creatorUsername
 			self.creatorAddress = _creatorAddress
 			self.description = _description
 			self.image = _image
 			self.extra = _extra
+			self.supply = _supply
+			self.unlimited = _supply == 0
 			self.minted = 0
 			self.timer = 0
+			self.pieceCreationDate = _pieceCreationDate
+			self.contentCreationDate = _contentCreationDate
 			self.creationTime = _currentTime
+			self.lockdownTime = _lockdownTime
 			self.embededHTML = _embededHTML
 		}
 	}
@@ -173,12 +191,14 @@ pub contract Piece: NonFungibleToken, ViewResolver {
 			switch view {
 				case Type<MetadataViews.Display>():
 					return MetadataViews.Display(
-						creatorID: metadata.creatorID.toString(),
+						creatorID: metadata.creatorUsername.concat(" ").concat(metadata.contentCreationDate),
 						description: metadata.description,
 						thumbnail: metadata.image
 					)
 				case Type<MetadataViews.Traits>():
-					return MetadataViews.dictToTraits(dict: self.getMetadata().extra, excludedNames: nil)
+					let metaCopy = metadata.extra
+					metaCopy["Serial"] = self.serial
+					return MetadataViews.dictToTraits(dict: metaCopy, excludedNames: nil)
 
 				case Type<MetadataViews.NFTView>():
 					return MetadataViews.NFTView(
@@ -215,7 +235,7 @@ pub contract Piece: NonFungibleToken, ViewResolver {
             			MetadataViews.Royalty(
               				recepient: getAccount(metadata.creatorAddress).getCapability<&FlowToken.Vault{FungibleToken.Receiver}>(/public/flowTokenReceiver),
               				cut: 0.10, // 10% royalty on secondary sales
-              				description: "The creator of the original content get's 10% of every secondary sale."
+              				description: "The creator of the original content gets 10% of every secondary sale."
             			)
           			])
 				case Type<MetadataViews.Serial>():
@@ -229,12 +249,12 @@ pub contract Piece: NonFungibleToken, ViewResolver {
 		init(_creatorID: UInt64, _description: String, _recipient: Address) {
 
 			// Fetch the metadata blueprint
-			let metadatas <- Piece.account.load<@Piece.MetadataStorage>(from: Piece.MetadataStoragePath)!
+			let metadatas = Piece.account.borrow<&Piece.MetadataStorage>(from: Piece.MetadataStoragePath)!
 			let metadataRef = metadatas.findMetadata(_creatorID, _description)!
 			// Assign serial number to the NFT based on the number of minted NFTs
 			self.id = self.uuid
 			self.creatorID = _creatorID
-			self.serial = metadataRef.minted
+			self.serial = metadataRef.minted + 1
 			self.description = _description
 			self.originalMinter = _recipient
 
@@ -245,7 +265,7 @@ pub contract Piece: NonFungibleToken, ViewResolver {
 
 			emit Minted(id: self.id, serial: self.serial, recipient: _recipient, creatorID: _creatorID)
 
-			Piece.account.save(<- metadatas, to: Piece.MetadataStoragePath)
+		//	Piece.account.save(<- metadatas, to: Piece.MetadataStoragePath)
 		}
 	}
 
@@ -342,33 +362,43 @@ pub contract Piece: NonFungibleToken, ViewResolver {
 		pub fun createNFTMetadata(
 			channel: String,
 			creatorID: UInt64,
+			creatorUsername: String, 
 			creatorAddress: Address,
 			sourceURL: String,
 			description: String,
 			pieceCreationDate: String,
 			contentCreationDate: String,
+			lockdownOption: Int,
+			supplyOption: UInt64,
 			imgUrl: String,
 			embededHTML: String,
 		) {
-			let metadatas <- Piece.account.load<@Piece.MetadataStorage>(from: Piece.MetadataStoragePath)!
+			// Load the metadata from the Piece account
+			let metadatas = Piece.account.borrow<&Piece.MetadataStorage>(from: Piece.MetadataStoragePath)!
 				// Check if Metadata already exist
 			if metadatas.metadataIsNew(creatorID, description) {
 					metadatas.addMetadata(creatorID, NFTMetadata(
 							_creatorID: creatorID,
+							_creatorUsername: creatorUsername,
 							_creatorAddress: creatorAddress,
 							_description: description,
 							_image: MetadataViews.HTTPFile(
 								url: imgUrl,
 							),
+							_supply: supplyOption,
 							_extra: {
+								"Creator username": creatorUsername,
+								"Creator ID": creatorID,
 								"Channel": channel,
-								"Creator": creatorID,
-								"Source": sourceURL,
 								"Text content": description,
+								"Source": sourceURL,
 								"Piece creation date": pieceCreationDate,
 								"Content creation date": contentCreationDate
 								},
+							_pieceCreationDate: pieceCreationDate,
+							_contentCreationDate: contentCreationDate,
 							_currentTime: getCurrentBlock().timestamp,
+							_lockdownTime: self.getLockdownTime(lockdownOption),
 							_embededHTML: embededHTML,
 					))
 					emit MetadataSuccess(creatorID: creatorID, description: description)
@@ -376,14 +406,14 @@ pub contract Piece: NonFungibleToken, ViewResolver {
 					emit MetadataError(error: "A Metadata for this Event already exist")
 				}
 
-			Piece.account.save(<- metadatas, to: Piece.MetadataStoragePath)
+			// Piece.account.save(<- metadatas, to: Piece.MetadataStoragePath)
 		}
 
 		// mintNFT mints a new NFT and deposits
 		// it in the recipients collection
 		pub fun mintNFT(creatorId: UInt64, description: String, recipient: Address) {
 			pre {
-				self.isMintingAvailable(creatorId, description): "Minting for this NFT has ended."
+				self.isMintingAvailable(creatorId, description): "Minting for this NFT has ended or reached max supply."
 			}
 
 			let nft <- create NFT(_creatorID: creatorId, _description: description, _recipient: recipient)
@@ -409,9 +439,43 @@ pub contract Piece: NonFungibleToken, ViewResolver {
 		}
 		access(account) fun isMintingAvailable(_ creatorId: UInt64, _ description: String): Bool {
 			let metadata = Piece.getNFTMetadata(creatorId, description)!
-			let answer = getCurrentBlock().timestamp <= (metadata.creationTime + 86400.0)
+			if (metadata.unlimited) {
+				if (metadata.lockdownTime != 0.0) {
+					let answer = getCurrentBlock().timestamp <= (metadata.creationTime + metadata.lockdownTime)
+					return answer
 
-			return answer
+				} else {
+					return true
+				}
+			} else {
+				if(metadata.minted < metadata.supply) {
+					if (metadata.lockdownTime != 0.0) {
+						let answer = getCurrentBlock().timestamp <= (metadata.creationTime + metadata.lockdownTime)
+						return answer
+
+					} else {
+						return true
+					}
+
+				} else {
+					return false
+				}
+			}
+
+		}
+		access(account) fun getLockdownTime(_ lockdownOption: Int): UFix64 {
+			switch lockdownOption {
+				case 0: 
+					return 21600.0
+				case 1: 
+					return 43200.0
+				case 2:
+					return 86400.0
+				case 3: 
+					return 172800.0
+				default:
+					return 0.0
+			}
 		}
 
 	}
@@ -478,6 +542,36 @@ pub contract Piece: NonFungibleToken, ViewResolver {
 		return self.collectionInfo[key] ?? panic(key.concat(" is not an attribute in this collection."))
 	}
 
+	pub fun isMintingAvailable(_ creatorId: UInt64, _ description: String): Bool {
+
+		let metadata = Piece.getNFTMetadata(creatorId, description)!
+
+		if (metadata.unlimited) {
+
+			if (metadata.lockdownTime != 0.0) {
+				
+				let answer = getCurrentBlock().timestamp <= (metadata.creationTime + metadata.lockdownTime)
+				return answer
+
+				} else {
+					return true
+				}
+			} else {
+				if(metadata.minted < metadata.supply) {
+					if (metadata.lockdownTime != 0.0) {
+						let answer = getCurrentBlock().timestamp <= (metadata.creationTime + metadata.lockdownTime)
+						return answer
+
+					} else {
+						return true
+					}
+
+				} else {
+					return false
+				}
+			}
+	}
+
 	init() {
 		// Collection Info
 		self.collectionInfo = {}
@@ -495,13 +589,15 @@ pub contract Piece: NonFungibleToken, ViewResolver {
 		self.totalSupply = 0
 		self.nftStorage <- {}
 
+		let identifier = "Piece_Collection".concat(self.account.address.toString())
+
 		// Set the named paths
-		self.CollectionStoragePath = /storage/PieceCollection
-		self.CollectionPublicPath = /public/PieceCollection
-		self.CollectionPrivatePath = /private/PieceCollection
-		self.AdministratorStoragePath = /storage/PieceAdministrator
-		self.MetadataStoragePath = /storage/PieceMetadata
-		self.MetadataPublicPath = /public/PieceMetadata
+		self.CollectionStoragePath = StoragePath(identifier: identifier)!
+		self.CollectionPublicPath = PublicPath(identifier: identifier)!
+		self.CollectionPrivatePath = PrivatePath(identifier: identifier)!
+		self.AdministratorStoragePath = StoragePath(identifier: identifier.concat("_Administrator"))!
+		self.MetadataStoragePath = StoragePath(identifier: identifier.concat("_Metadata"))!
+		self.MetadataPublicPath = PublicPath(identifier: identifier.concat("_Metadata"))!
 
 		// Create a Collection resource and save it to storage
 		let collection <- create Collection()
