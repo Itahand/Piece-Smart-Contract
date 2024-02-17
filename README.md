@@ -6,7 +6,7 @@ interacts with Flow is written with Cadence; a new high-level programming langua
 ## Table of content
 
 - [Cadence](#cadence)
-    - [Smart Contract](#smart-contracts)
+    - [Smart Contract](#smart-contract)
     - [Transactions](#transactions)
     - [Scripts](#scripts)
 
